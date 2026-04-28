@@ -1,0 +1,7 @@
+aiogram==3.13.1
+pyvis==0.3.2
+google-generativeai
+playwright>=1.44.0
+aiohttp>=3.9.0
+networkx>=3.3
+python-dotenv>=1.0.0
