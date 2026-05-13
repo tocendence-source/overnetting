@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>OverNetting · Investigation #999</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/vis-network.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #060b0d;
+    --bg2:      #0b1418;
+    --bg3:      #0f1c21;
+    --border:   #1a3a30;
+    --green:    #39ff14;
+    --cyan:     #00e5ff;
+    --amber:    #ffc107;
+    --red:      #ff4444;
+    --muted:    #4a7a60;
+    --text:     #b8ffcc;
+    --text2:    #6abf82;
+    --font:     'JetBrains Mono', 'Courier New', monospace;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    overflow: hidden;
+  }
+
+  /* ── Grid scanline overlay ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(57,255,20,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(57,255,20,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* ── Layout ── */
+  #app {
+    position: relative; z-index: 2;
+    width: 100vw; height: 100vh;
+    display: grid;
+    grid-template-columns: 220px 1fr 220px;
+    grid-template-rows: 48px 1fr 36px;
+  }
+
+  /* ── Header ── */
+  #header {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(6,11,13,0.95);
+    backdrop-filter: blur(8px);
+  }
+  .logo {
+    font-size: 13px; font-weight: 700; letter-spacing: 3px;
+    color: var(--green); text-transform: uppercase;
+  }
+  .logo span { color: var(--cyan); }
+  .header-sep { flex: 1; }
+  .badge {
+    font-size: 10px; padding: 2px 8px;
+    border: 1px solid currentColor;
+    border-radius: 2px; letter-spacing: 1px;
+  }
+  .badge-inv { color: var(--cyan); }
+  .badge-ts  { color: var(--muted); }
+
+  /* ── Panels ── */
+  .panel {
+    background: rgba(11,20,24,0.92);
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    overflow-y: auto;
+    backdrop-filter: blur(6px);
+  }
+  .panel.right { border-right: none; border-left: 1px solid var(--border); }
+
+  .panel-title {
+    font-size: 9px; letter-spacing: 2px; font-weight: 700;
+    color: var(--muted); text-transform: uppercase;
+    margin-bottom: 10px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Stats ── */
+  .stat-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(26,58,48,0.4);
+    font-size: 11px;
+  }
+  .stat-label { color: var(--text2); }
+  .stat-value { color: var(--green); font-weight: 700; }
+  .stat-value.amber { color: var(--amber); }
+  .stat-value.cyan  { color: var(--cyan);  }
+  .stat-value.red   { color: var(--red);   }
+
+  /* ── Legend ── */
+  .legend-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0; font-size: 11px; color: var(--text2);
+  }
+  .legend-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+
+  /* ── Top nodes ── */
+  .top-node {
+    padding: 5px 6px; margin-bottom: 4px;
+    background: rgba(15,28,33,0.8);
+    border: 1px solid var(--border);
+    border-radius: 3px; font-size: 10px;
+    color: var(--text2); cursor: default;
+  }
+  .top-node strong { color: var(--text); display: block; font-size: 11px; }
+  .top-node em { color: var(--muted); font-style: normal; font-size: 9px; }
+
+  /* ── Graph canvas ── */
+  #graph-wrap {
+    position: relative;
+    background: transparent;
+  }
+  #graph {
+    width: 100%; height: 100%;
+  }
+
+  /* ── Corner HUD decorators ── */
+  .hud-corner {
+    position: absolute; width: 20px; height: 20px;
+    border-color: var(--green); border-style: solid;
+    opacity: 0.5; pointer-events: none;
+  }
+  .hud-tl { top: 8px; left: 8px;  border-width: 2px 0 0 2px; }
+  .hud-tr { top: 8px; right: 8px; border-width: 2px 2px 0 0; }
+  .hud-bl { bottom: 8px; left: 8px;  border-width: 0 0 2px 2px; }
+  .hud-br { bottom: 8px; right: 8px; border-width: 0 2px 2px 0; }
+
+  /* ── Crosshair dot ── */
+  .crosshair {
+    position: absolute; top: 50%; left: 50%;
+    width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border: 1px solid rgba(57,255,20,0.2); border-radius: 50%;
+    pointer-events: none;
+  }
+
+  /* ── Footer ── */
+  #footer {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: 20px;
+    padding: 0 16px;
+    border-top: 1px solid var(--border);
+    background: rgba(6,11,13,0.95);
+    font-size: 9px; color: var(--muted); letter-spacing: 1px;
+  }
+  #footer .ping { color: var(--green); animation: blink 1.2s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── vis.js tooltip override ── */
+  .vis-tooltip {
+    background: rgba(11,20,24,0.97) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
+    color: var(--text) !important;
+    font-family: var(--font) !important;
+    font-size: 11px !important;
+    padding: 10px 12px !important;
+    box-shadow: 0 0 20px rgba(57,255,20,0.1) !important;
+    max-width: 260px !important;
+  }
+
+  /* ── vis.js nav buttons ── */
+  .vis-navigation .vis-button {
+    background: rgba(11,20,24,0.9) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 3px !important;
+  }
+  .vis-navigation .vis-button:hover {
+    background: rgba(57,255,20,0.08) !important;
+    border-color: var(--green) !important;
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <div id="header">
+    <div class="logo">Over<span>Netting</span></div>
+    <div style="font-size:10px;color:var(--muted);letter-spacing:1px;">
+      OSINT GRAPH ANALYSIS SYSTEM
+    </div>
+    <div class="header-sep"></div>
+    <span class="badge badge-inv">INV #0999</span>
+    <span class="badge badge-ts">2026-04-17 19:32:07</span>
+    <span class="badge" style="color:var(--green);animation:blink 1.2s step-end infinite">● LIVE</span>
+  </div>
+
+  <!-- Left panel: Stats -->
+  <div class="panel">
+    <div class="panel-title">// system stats</div>
+    <div class="stat-row">
+      <span class="stat-label">entities</span>
+      <span class="stat-value">6</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">links total</span>
+      <span class="stat-value cyan">1</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">strong</span>
+      <span class="stat-value">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">medium</span>
+      <span class="stat-value amber">1</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">weak</span>
+      <span class="stat-value red">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">types</span>
+      <span class="stat-value cyan">6</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">density</span>
+      <span class="stat-value amber">0.07</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">hub node</span>
+      <span class="stat-value" style="font-size:9px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="📧 example@mail.com">📧 example@mail.com</span>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="panel-title">// top nodes</div>
+      <div class="top-node"><strong style="color:#2EAADC">@example_user</strong><em>Telegram · 1 links</em></div><div class="top-node"><strong style="color:#F87171">example@mail.com</strong><em>Email · 1 links</em></div><div class="top-node"><strong style="color:#F9A8D4">192.168.1.1</strong><em>IP · 0 links</em></div><div class="top-node"><strong style="color:#6EE7B7">d41d8cd98f00b204e980…</strong><em>Hash · 0 links</em></div><div class="top-node"><strong style="color:#4ADE80">50.4501, 30.5234</strong><em>Coordinates · 0 links</em></div>
+    </div>
+  </div>
+
+  <!-- Center: Graph -->
+  <div id="graph-wrap">
+    <div class="hud-corner hud-tl"></div>
+    <div class="hud-corner hud-tr"></div>
+    <div class="hud-corner hud-bl"></div>
+    <div class="hud-corner hud-br"></div>
+    <div class="crosshair"></div>
+    <div id="graph"></div>
+  </div>
+
+  <!-- Right panel: Legend + controls -->
+  <div class="panel right">
+    <div class="panel-title">// entity types</div>
+    <div class="legend-item"><span class="legend-dot" style="background:#4ADE80; box-shadow:0 0 6px #4ADE8066"></span><span>📡 Coordinates</span></div>
+<div class="legend-item"><span class="legend-dot" style="background:#F87171; box-shadow:0 0 6px #F8717166"></span><span>📧 Email</span></div>
+<div class="legend-item"><span class="legend-dot" style="background:#6EE7B7; box-shadow:0 0 6px #6EE7B766"></span><span>#️⃣ Hash</span></div>
+<div class="legend-item"><span class="legend-dot" style="background:#F9A8D4; box-shadow:0 0 6px #F9A8D466"></span><span>🖧 IP</span></div>
+<div class="legend-item"><span class="legend-dot" style="background:#2EAADC; box-shadow:0 0 6px #2EAADC66"></span><span>✈️ Telegram</span></div>
+<div class="legend-item"><span class="legend-dot" style="background:#A3E635; box-shadow:0 0 6px #A3E63566"></span><span>🚗 Vehicle</span></div>
+
+    <div style="margin-top:16px;">
+      <div class="panel-title">// link strength</div>
+      <div class="legend-item">
+        <span style="display:inline-block;width:24px;height:2px;background:#39ff14;
+              box-shadow:0 0 4px #39ff14;vertical-align:middle"></span>
+        <span>strong</span>
+      </div>
+      <div class="legend-item">
+        <span style="display:inline-block;width:24px;height:2px;background:#20c997;
+              vertical-align:middle"></span>
+        <span>medium</span>
+      </div>
+      <div class="legend-item">
+        <span style="display:inline-block;width:24px;height:1px;background:#2f6b4a;
+              border-top:1px dashed #2f6b4a;vertical-align:middle"></span>
+        <span>weak</span>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="panel-title">// controls</div>
+      <div style="font-size:10px;color:var(--muted);line-height:2">
+        scroll → zoom<br>
+        drag → pan<br>
+        node drag → move<br>
+        hover → details<br>
+        dbl-click → fix/free
+      </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="panel-title">// actions</div>
+      <button onclick="network.fit()" style="
+        width:100%;padding:6px;margin-bottom:6px;
+        background:transparent;border:1px solid var(--border);
+        color:var(--text2);font-family:var(--font);font-size:10px;
+        letter-spacing:1px;cursor:pointer;border-radius:2px;
+      " onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'"
+        onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)'">
+        [FIT ALL]
+      </button>
+      <button onclick="togglePhysics()" style="
+        width:100%;padding:6px;
+        background:transparent;border:1px solid var(--border);
+        color:var(--text2);font-family:var(--font);font-size:10px;
+        letter-spacing:1px;cursor:pointer;border-radius:2px;
+      " onmouseover="this.style.borderColor='var(--cyan)';this.style.color='var(--cyan)'"
+        onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)'">
+        [TOGGLE PHYSICS]
+      </button>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div id="footer">
+    <span class="ping">◉</span>
+    <span>OVERNETTING OSINT ENGINE v2.0</span>
+    <span style="color:var(--border)">|</span>
+    <span>INVESTIGATION #0999</span>
+    <span style="color:var(--border)">|</span>
+    <span>6 NODES · 1 EDGES</span>
+    <span style="flex:1"></span>
+    <span>vis-network 9.1.9</span>
+  </div>
+
+</div>
+
+<script>
+const nodesData = [{"id": "Telegram::@example_user", "label": "✈️ @example_user", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#2EAADC;font-weight:700;font-size:12px'>[ TELEGRAM ]</span><br><span style='color:#e8ffe8'>@example_user</span><br><span style='color:#4a7a60'>confidence: 95%</span><br><span style='color:#4a7a60'>degree: 1</span></div>", "color": {"background": "#2EAADC18", "border": "#2EAADC", "highlight": {"background": "#2EAADC35", "border": "#2EAADC"}, "hover": {"background": "#2EAADC28", "border": "#2EAADC"}}, "size": 25, "borderWidth": 3, "x": 252.0, "y": 0.0, "shadow": {"enabled": true, "color": "#2EAADC55", "size": 16, "x": 0, "y": 0}}, {"id": "Email::example@mail.com", "label": "📧 example@mail.com", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#F87171;font-weight:700;font-size:12px'>[ EMAIL ]</span><br><span style='color:#e8ffe8'>example@mail.com</span><br><span style='color:#4a7a60'>confidence: 100%</span><br><span style='color:#4a7a60'>degree: 1</span></div>", "color": {"background": "#F8717118", "border": "#F87171", "highlight": {"background": "#F8717135", "border": "#F87171"}, "hover": {"background": "#F8717128", "border": "#F87171"}}, "size": 26, "borderWidth": 3, "x": 126.0, "y": 218.24, "shadow": {"enabled": true, "color": "#F8717155", "size": 16, "x": 0, "y": 0}}, {"id": "IP::192.168.1.1", "label": "🖧 192.168.1.1", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#F9A8D4;font-weight:700;font-size:12px'>[ IP ]</span><br><span style='color:#e8ffe8'>192.168.1.1</span><br><span style='color:#4a7a60'>confidence: 100%</span><br><span style='color:#4a7a60'>degree: 0</span></div>", "color": {"background": "#F9A8D418", "border": "#F9A8D4", "highlight": {"background": "#F9A8D435", "border": "#F9A8D4"}, "hover": {"background": "#F9A8D428", "border": "#F9A8D4"}}, "size": 22, "borderWidth": 3, "x": -161.0, "y": 278.86, "shadow": {"enabled": true, "color": "#F9A8D455", "size": 16, "x": 0, "y": 0}}, {"id": "Hash::d41d8cd98f00b204e9800998ecf8427e", "label": "#️⃣ d41d8cd98f00b204e980…", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#6EE7B7;font-weight:700;font-size:12px'>[ HASH ]</span><br><span style='color:#e8ffe8'>d41d8cd98f00b204e9800998ecf8427e</span><br><span style='color:#4a7a60'>confidence: 80%</span><br><span style='color:#4a7a60'>degree: 0</span></div>", "color": {"background": "#6EE7B718", "border": "#6EE7B7", "highlight": {"background": "#6EE7B735", "border": "#6EE7B7"}, "hover": {"background": "#6EE7B728", "border": "#6EE7B7"}}, "size": 20, "borderWidth": 3, "x": -322.0, "y": 0.0, "shadow": {"enabled": true, "color": "#6EE7B755", "size": 16, "x": 0, "y": 0}}, {"id": "Coordinates::50.4501, 30.5234", "label": "📡 50.4501, 30.5234", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#4ADE80;font-weight:700;font-size:12px'>[ COORDINATES ]</span><br><span style='color:#e8ffe8'>50.4501, 30.5234</span><br><span style='color:#4a7a60'>confidence: 100%</span><br><span style='color:#4a7a60'>degree: 0</span></div>", "color": {"background": "#4ADE8018", "border": "#4ADE80", "highlight": {"background": "#4ADE8035", "border": "#4ADE80"}, "hover": {"background": "#4ADE8028", "border": "#4ADE80"}}, "size": 22, "borderWidth": 3, "x": -161.0, "y": -278.86, "shadow": {"enabled": true, "color": "#4ADE8055", "size": 16, "x": 0, "y": 0}}, {"id": "Vehicle::AA0000AA", "label": "🚗 AA0000AA", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#A3E635;font-weight:700;font-size:12px'>[ VEHICLE ]</span><br><span style='color:#e8ffe8'>AA0000AA</span><br><span style='color:#4a7a60'>confidence: 90%</span><br><span style='color:#4a7a60'>degree: 0</span></div>", "color": {"background": "#A3E63518", "border": "#A3E635", "highlight": {"background": "#A3E63535", "border": "#A3E635"}, "hover": {"background": "#A3E63528", "border": "#A3E635"}}, "size": 21, "borderWidth": 3, "x": 161.0, "y": -278.86, "shadow": {"enabled": true, "color": "#A3E63555", "size": 16, "x": 0, "y": 0}}];
+const edgesData = [{"from": "Email::example@mail.com", "to": "Telegram::@example_user", "title": "<div style='font-family:monospace;font-size:11px;line-height:1.6'><span style='color:#20c997;font-weight:700'>[ EMAIL ↔ USERNAME ]</span><br><span style='color:#e8ffe8'>Локальная часть почты 'example' совпадает с ником '@example_user'</span><br><span style='color:#4a7a60'>confidence: 62%</span></div>", "label": "62%", "color": {"color": "#20c997", "opacity": 0.7, "highlight": "#ffffff", "hover": "#e8ffe8"}, "width": 1.8, "dashes": false, "smooth": {"type": "curvedCW", "roundness": 0.08}}];
+
+const container = document.getElementById('graph');
+const data = {
+  nodes: new vis.DataSet(nodesData),
+  edges: new vis.DataSet(edgesData),
+};
+
+const options = {
+  nodes: {
+    shape: 'dot',
+    borderWidth: 2,
+    borderWidthSelected: 3,
+    font: {
+      size: 12,
+      face: "'JetBrains Mono', 'Courier New', monospace",
+      color: '#b8ffcc',
+      strokeWidth: 3,
+      strokeColor: '#060b0d',
+      bold: { face: "'JetBrains Mono', monospace", color: '#e8ffe8', size: 12, vadjust: 0 },
+    },
+    shadow: {
+      enabled: true,
+      x: 0, y: 0, size: 18,
+      color: 'rgba(57,255,20,0.25)',
+    },
+  },
+  edges: {
+    smooth: { type: 'curvedCW', roundness: 0.12 },
+    font: {
+      size: 9,
+      face: "'JetBrains Mono', monospace",
+      color: '#4a7a60',
+      strokeWidth: 2,
+      strokeColor: '#060b0d',
+      align: 'middle',
+    },
+    arrowStrikethrough: false,
+    selectionWidth: 2,
+  },
+  physics: {
+    enabled: true,
+    forceAtlas2Based: {
+      gravitationalConstant: -90,
+      centralGravity: 0.005,
+      springLength: 200,
+      springConstant: 0.06,
+      damping: 0.45,
+      avoidOverlap: 1.0,
+    },
+    solver: 'forceAtlas2Based',
+    stabilization: { iterations: 300, fit: true },
+    maxVelocity: 60,
+    minVelocity: 0.8,
+  },
+  interaction: {
+    hover: true,
+    tooltipDelay: 100,
+    zoomView: true,
+    dragNodes: true,
+    dragView: true,
+    navigationButtons: true,
+    keyboard: { enabled: true, bindToWindow: false },
+    hideEdgesOnDrag: true,
+    multiselect: true,
+  },
+  layout: { improvedLayout: true },
+};
+
+const network = new vis.Network(container, data, options);
+let physicsOn = true;
+
+function fitGraph() {
+  network.fit({
+    animation: false,
+    padding: { top: 60, right: 60, bottom: 60, left: 60 }
+  });
+}
+
+network.once('stabilizationIterationsDone', () => {
+  fitGraph();
+  network.setOptions({ physics: { enabled: false } });
+  physicsOn = false;
+});
+
+setTimeout(() => {
+  fitGraph();
+}, 1200);
+
+window.__overnettingFit = fitGraph;
+
+network.on('doubleClick', params => {
+  if (params.nodes.length) {
+    const nodeId = params.nodes[0];
+    const pos = network.getPositions([nodeId]);
+    network.moveNode(nodeId, pos[nodeId].x, pos[nodeId].y);
+  }
+});
+
+function togglePhysics() {
+  physicsOn = !physicsOn;
+  network.setOptions({ physics: { enabled: physicsOn } });
+}
+</script>
+</body>
+</html>

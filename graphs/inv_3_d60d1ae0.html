@@ -1,0 +1,150 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 100%;
+                 height: 750px;
+                 background-color: #0f1117;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    
+<style>
+  body, html { background: #0f1117 !important; margin: 0; padding: 0; }
+  #mynetwork {
+    border: 1px solid rgba(91,141,239,0.2) !important;
+    border-radius: 16px !important;
+    background: radial-gradient(ellipse at 50% 0%, rgba(91,141,239,0.06) 0%, #0f1117 70%) !important;
+    box-shadow: 0 0 60px rgba(91,141,239,0.08) !important;
+  }
+  .vis-tooltip {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+  /* Navigation buttons */
+  .vis-navigation .vis-button {
+    background: rgba(30,36,51,0.85) !important;
+    border: 1px solid rgba(91,141,239,0.3) !important;
+    border-radius: 8px !important;
+    backdrop-filter: blur(12px) !important;
+  }
+</style>
+</head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"borderWidth": 2, "color": {"background": "#34D39922", "border": "#34D399", "highlight": {"background": "#34D39955", "border": "#34D399"}, "hover": {"background": "#34D39944", "border": "#34D399"}}, "font": {"color": "#c9d1d9"}, "id": "Phone::+380958494447", "label": "\ud83d\udcde +380958494447", "shape": "ellipse", "size": 38, "title": "\u003cdiv style=\u0027background:#1e2433;border-radius:10px;padding:10px;font-family:Inter,sans-serif;color:#e2e8f0;min-width:180px\u0027\u003e\u003cb style=\u0027color:#34D399\u0027\u003ePhone\u003c/b\u003e\u003cbr/\u003e\u003cspan style=\u0027font-size:14px\u0027\u003e+380958494447\u003c/span\u003e\u003cbr/\u003e\u003csmall style=\u0027color:#94a3b8\u0027\u003e\u0414\u043e\u0441\u0442\u043e\u0432\u0435\u0440\u043d\u043e\u0441\u0442\u044c: 90%\u003c/small\u003e\u003c/div\u003e"}]);
+                  edges = new vis.DataSet([]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"nodes": {"borderWidth": 2, "borderWidthSelected": 4, "shadow": {"enabled": true, "color": "rgba(91,141,239,0.4)", "size": 15, "x": 0, "y": 0}, "font": {"size": 13, "face": "Inter,SegoeUI,sans-serif", "color": "#e2e8f0", "strokeWidth": 2, "strokeColor": "#0f1117"}}, "edges": {"smooth": {"type": "dynamic", "roundness": 0.5}, "shadow": true}, "physics": {"enabled": true, "forceAtlas2Based": {"gravitationalConstant": -80, "centralGravity": 0.01, "springLength": 180, "springConstant": 0.08, "damping": 0.4, "avoidOverlap": 0.8}, "solver": "forceAtlas2Based", "stabilization": {"iterations": 200}}, "interaction": {"hover": true, "tooltipDelay": 150, "zoomView": true, "dragNodes": true, "navigationButtons": true, "keyboard": true}, "layout": {"improvedLayout": true}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>
