@@ -198,7 +198,12 @@ def _cleanup_graph_files(inv_id: int):
     if not graph_dir.exists():
         return
 
-    for pattern in (f"inv_{inv_id}_*.html", f"inv_{inv_id}_*.png"):
+    for pattern in (
+        f"inv_{inv_id}_*.html",
+        f"inv_{inv_id}_*.png",
+        f"posts_{inv_id}_*.html",
+        f"posts_{inv_id}_*.png",
+    ):
         for path in graph_dir.glob(pattern):
             try:
                 path.unlink()

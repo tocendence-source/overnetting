@@ -26,9 +26,8 @@ class Config:
     # Рабочая модель Gemini по умолчанию
     AI_MODEL: str = os.getenv("AI_MODEL", "models/gemini-2.5-flash")
 
-    # Database
-    # Если в .env будет DATABASE_URL от Railway, можно будет легко переключиться
-    DB_PATH: str = os.getenv("DATABASE_URL", "overnetting.db")
+    # Database (SQLite file path; do not use Railway Postgres DATABASE_URL here)
+    DB_PATH: str = os.getenv("DB_PATH", os.getenv("SQLITE_PATH", "overnetting.db"))
 
     # Local knowledge base (Telegram export)
     # Путь к файлу messages.html (экспорт чата/канала Telegram в HTML).
