@@ -11,9 +11,9 @@ BTN_ABOUT = "ℹ️ О боте"
 
 AI_PROVIDER_LABELS = {
     "auto": "Auto",
-    "gemini": "Gemini",
-    "gemma": "Gemma",
-    "local": "Local",
+    "gemini": "Gemini 💰",
+    "gemma": "Gemma 🆓",
+    "local": "Local 📚",
 }
 
 
@@ -133,6 +133,7 @@ AI_READY_TEXT = """
 <b>ShkoloDrive AI</b>
 
 Отправь вопрос обычным сообщением или используй команду /ai.
+Выбери модель кнопками ниже (лимиты и подсказки — в следующем блоке).
 Чтобы вернуться к анализу данных, нажми «🔍 Новое расследование».
 """.strip()
 

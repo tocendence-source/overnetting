@@ -25,9 +25,9 @@ AI_PROVIDER_LOCAL = "local"
 
 AI_PROVIDER_LABELS = {
     AI_PROVIDER_AUTO: "Auto",
-    AI_PROVIDER_GEMINI: "Gemini",
-    AI_PROVIDER_GEMMA: "Gemma",
-    AI_PROVIDER_LOCAL: "Local",
+    AI_PROVIDER_GEMINI: "Gemini 💰",
+    AI_PROVIDER_GEMMA: "Gemma 🆓",
+    AI_PROVIDER_LOCAL: "Local 📚",
 }
 
 GEMINI_MODELS = (
@@ -36,9 +36,11 @@ GEMINI_MODELS = (
     "models/gemini-2.0-flash",
 )
 
+# Gemma 3 IDs are not available on all API keys; Gemma 2 works on AI Studio.
 GEMMA_MODELS = (
-    "models/gemma-3-12b-it",
-    "models/gemma-3-4b-it",
+    "models/gemma-2-27b-it",
+    "models/gemma-2-9b-it",
+    "models/gemma-2-2b-it",
 )
 
 _quota_blocked_until: dict[str, datetime] = {}
@@ -150,28 +152,67 @@ def _get_model(model_name: str, system_instruction: str | None = None) -> genai.
 def _extract_response_text(response) -> str:
     try:
         text = response.text
+        if text:
+            return text.strip()
     except Exception:
-        text = ""
-    return (text or "").strip()
+        pass
 
-
-def _build_knowledge_context() -> str:
     try:
+        parts: list[str] = []
+        for candidate in response.candidates or []:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            for part in content.parts or []:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(part_text)
+        return " ".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def _posts_to_context_chunks(posts: list, snippet_len: int = 600) -> list[str]:
+    chunks: list[str] = []
+    for post in posts:
+        if isinstance(post, dict):
+            date_str = (post.get("date") or "")[:10] or "?"
+            text = (post.get("text") or "").strip()[:snippet_len]
+            mid = post.get("message_id")
+        else:
+            date_str = (post["date"] or "")[:10] if post["date"] else "?"
+            text = (post["text"] or "").strip()[:snippet_len]
+            mid = post["message_id"] if "message_id" in post.keys() else None
+
+        if not text:
+            continue
+        prefix = f"[#{mid} {date_str}]" if mid else f"[{date_str}]"
+        chunks.append(f"{prefix} {text}")
+    return chunks
+
+
+def _build_relevant_posts_context(question: str = "", limit: int = 5) -> str:
+    """Context from channel DB: search by question, else recent posts."""
+    try:
+        if question.strip():
+            matches = search_channel_posts(question, limit=limit)
+            if matches:
+                chunks = _posts_to_context_chunks(matches)
+                return "Релевантные посты канала (по запросу):\n\n" + "\n\n".join(chunks)
+
         posts = get_recent_posts(limit=30)
         if not posts:
             return "База знаний пуста. Канал еще не проиндексирован."
 
-        chunks = []
-        for post in posts:
-            date_str = post["date"][:10] if post["date"] else "?"
-            text = (post["text"] or "").strip()[:600]
-            if text:
-                chunks.append(f"[{date_str}] {text}")
-
-        return "\n\n".join(chunks)
+        chunks = _posts_to_context_chunks(posts)
+        return "Последние посты канала:\n\n" + "\n\n".join(chunks)
     except Exception as exc:
         logger.error("Ошибка при сборке контекста из БД: %s", exc)
         return "Ошибка доступа к базе знаний."
+
+
+def _build_knowledge_context(question: str = "") -> str:
+    return _build_relevant_posts_context(question)
 
 
 def _pick_hint(options: list[str], seed_text: str, salt: str) -> str:
@@ -293,6 +334,11 @@ def _build_local_fallback(question: str = "", context: str = "") -> str:
         "Сначала найдите один подтверждаемый идентификатор человека, затем стройте связи только через повторяющиеся совпадения.",
         "Опорной точкой сделайте контакт или профиль, а дальше проверяйте одинаковые ники, фото, гео и круг связей.",
     ]
+    photo_options = [
+        "Сделайте обратный поиск по изображению (Google Lens, Yandex, TinEye), затем проверьте EXIF и геометки на кадре.",
+        "Начните с reverse image search и анализа метаданных файла, потом сопоставьте фон, вывески и объекты с картами и архивами.",
+        "Проверьте фото через поиск по картинке, извлеките EXIF/GPS, определите место по панорамам и сверьте детали с открытыми источниками.",
+    ]
     company_options = [
         "Проверьте домен, юрназвание, контактные email и соцсети компании, а затем связывайте их между собой.",
         "Начните с юрназвания и домена, потом ищите сотрудников, контакты, публикации и связанные сайты.",
@@ -328,6 +374,8 @@ def _build_local_fallback(question: str = "", context: str = "") -> str:
         hints.append(_pick_hint(social_options, seed_text, "social-text"))
     if not hints and any(word in text_lower for word in ("почт", "email", "@gmail", "@mail", "@yandex")):
         hints.append(_pick_hint(email_options, seed_text, "email-text"))
+    if any(word in text_lower for word in ("фото", "фотограф", "изображен", "картинк", "скрин", "снимок", "picture", "image")):
+        hints.insert(0, _pick_hint(photo_options, seed_text, "photo"))
 
     if not hints:
         hints.append(_pick_hint(person_options, seed_text, "default-person"))
@@ -415,6 +463,27 @@ async def _generate_text(
     raise RuntimeError("No available model candidates for this provider.")
 
 
+async def _generate_with_fallback(
+    prompt: str,
+    system_instruction: str,
+    provider: str,
+    generation_config: genai.types.GenerationConfig | None = None,
+) -> tuple[str, str]:
+    """Try requested provider; on Gemma/model errors fall back to Gemini."""
+    try:
+        return await _generate_text(prompt, system_instruction, provider, generation_config)
+    except Exception as exc:
+        if provider == AI_PROVIDER_GEMINI or not _is_model_lookup_error(exc):
+            raise
+        logger.warning("Провайдер %s недоступен (%s), пробую Gemini.", provider, exc)
+        return await _generate_text(
+            prompt,
+            system_instruction,
+            AI_PROVIDER_GEMINI,
+            generation_config,
+        )
+
+
 SYSTEM_PROMPT = """Ты - ShkoloDrive AI, эксперт-помощник по OSINT.
 Твоя задача: на основе имеющихся знаний направлять исследователя.
 
@@ -442,7 +511,7 @@ async def ask_ai(user_question: str, user_context: str = "", provider: str = AI_
             f"{_build_local_fallback(user_question, user_context)}"
         )
 
-    knowledge = _build_knowledge_context()
+    knowledge = _build_knowledge_context(user_question)
     system = SYSTEM_PROMPT.format(knowledge=knowledge)
 
     prompt_parts = []
@@ -452,23 +521,28 @@ async def ask_ai(user_question: str, user_context: str = "", provider: str = AI_
     full_prompt = "\n\n".join(prompt_parts)
 
     try:
-        text, model_name = await _generate_text(
+        text, model_name = await _generate_with_fallback(
             full_prompt,
             system_instruction=system,
             provider=provider,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=500,
+                max_output_tokens=1024,
                 temperature=0.7,
             ),
         )
         return text
     except Exception as exc:
-        if _is_quota_error(exc):
-            logger.warning("%s недоступен из-за лимита API.", get_provider_label(provider))
-            return _build_local_answer(provider, user_question, user_context, reason="quota")
+        if _is_quota_error(exc) or _is_model_lookup_error(exc):
+            logger.warning("%s недоступен: %s", get_provider_label(provider), exc)
+            return _build_local_answer(
+                provider,
+                user_question,
+                user_context,
+                reason="quota" if _is_quota_error(exc) else "models",
+            )
 
         logger.error("Ошибка AI (%s): %s", get_provider_label(provider), exc)
-        return f"❌ Ошибка ИИ: {exc}"
+        return _build_local_answer(provider, user_question, user_context, reason="error")
 
 
 async def analyze_entities_with_ai(
@@ -485,7 +559,7 @@ async def analyze_entities_with_ai(
     if not config.GOOGLE_API_KEY:
         return _build_local_fallback(context=entities_text)
 
-    knowledge = _build_knowledge_context()
+    knowledge = _build_knowledge_context(entities_text)
     system = SYSTEM_PROMPT.format(knowledge=knowledge)
     prompt = (
         f"Я нашел следующие зацепки (сущности):\n{entities_text}\n\n"
@@ -493,20 +567,20 @@ async def analyze_entities_with_ai(
     )
 
     try:
-        text, model_name = await _generate_text(
+        text, model_name = await _generate_with_fallback(
             prompt,
             system_instruction=system,
             provider=provider,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=300,
+                max_output_tokens=512,
                 temperature=0.5,
             ),
         )
         return text
     except Exception as exc:
-        if _is_quota_error(exc):
-            logger.warning("%s недоступен для анализа сущностей из-за лимита API.", get_provider_label(provider))
+        if _is_quota_error(exc) or _is_model_lookup_error(exc):
+            logger.warning("%s недоступен для анализа сущностей: %s", get_provider_label(provider), exc)
             return _build_local_fallback(context=entities_text)
 
         logger.error("Ошибка при анализе сущностей (%s): %s", get_provider_label(provider), exc)
-        return ""
+        return _build_local_fallback(context=entities_text)

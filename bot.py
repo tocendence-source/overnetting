@@ -5,6 +5,7 @@ Stack: aiogram 3.x, Python 3.11+
 """
 
 import asyncio
+import html as html_module
 import logging
 import os
 from pathlib import Path
@@ -21,6 +22,12 @@ from ai_assistant import (
     analyze_entities_with_ai,
     get_provider_label,
     normalize_provider,
+)
+from ai_usage import (
+    check_ai_allowed,
+    format_models_guide,
+    format_usage_status,
+    record_ai_usage,
 )
 from channel_monitor import check_subscription, index_channel_history, process_channel_post
 from config import config
@@ -231,6 +238,39 @@ async def _send_graph_preview(message: Message, inv_id: int, html_path: str, cap
         )
 
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def _escape_html(text: str) -> str:
+    return html_module.escape(text or "")
+
+
+async def _send_html_message(target: Message, text: str, *, edit_message: Message | None = None):
+    """Send or edit HTML message, splitting if over Telegram limit."""
+    if len(text) <= TELEGRAM_MESSAGE_LIMIT:
+        if edit_message:
+            await edit_message.edit_text(text)
+        else:
+            await target.answer(text)
+        return
+
+    if edit_message:
+        first_limit = TELEGRAM_MESSAGE_LIMIT - 20
+        await edit_message.edit_text(text[:first_limit] + "…")
+        remainder = text[first_limit:]
+    else:
+        remainder = text
+
+    while remainder:
+        chunk = remainder[:TELEGRAM_MESSAGE_LIMIT]
+        remainder = remainder[TELEGRAM_MESSAGE_LIMIT:]
+        await target.answer(chunk)
+
+
+def _format_ai_reply(label: str, answer: str) -> str:
+    return f"🤖 <b>ShkoloDrive AI</b> <i>({_escape_html(label)})</i>\n\n{_escape_html(answer)}"
+
+
 def _build_entities_block(entities: list[Entity], title: str) -> str:
     if not entities:
         return ""
@@ -241,12 +281,20 @@ def _build_entities_block(entities: list[Entity], title: str) -> str:
 
 
 async def _answer_ai_question(message: Message, question: str):
+    user_id = message.from_user.id
     thinking = await message.answer("🤖 Думаю над ответом...")
-    inv_id = _active_inv.get(message.from_user.id)
-    provider = get_user_ai_provider(message.from_user.id)
-    answer = await ask_ai(question, _build_ai_context(inv_id), provider=provider)
+    inv_id = _active_inv.get(user_id)
+    provider = get_user_ai_provider(user_id)
     label = get_provider_label(provider)
-    await thinking.edit_text(f"🤖 <b>ShkoloDrive AI</b> <i>({label})</i>\n\n{answer}")
+
+    allowed, block_msg = check_ai_allowed(user_id, provider, is_admin=is_admin(user_id))
+    if not allowed:
+        await _send_html_message(message, _format_ai_reply(label, block_msg or ""), edit_message=thinking)
+        return
+
+    answer = await ask_ai(question, _build_ai_context(inv_id), provider=provider)
+    record_ai_usage(user_id, provider)
+    await _send_html_message(message, _format_ai_reply(label, answer), edit_message=thinking)
 
     # Extra: always send a small visualization after the text answer
     # based on similar channel posts (helps with FIO / fuzzy queries in local mode too).
@@ -264,11 +312,10 @@ async def _answer_ai_question(message: Message, question: str):
 
 def _build_ai_ready_text(user_id: int) -> str:
     provider = get_user_ai_provider(user_id)
-    label = get_provider_label(provider)
     return (
         f"{AI_READY_TEXT}\n\n"
-        f"<b>Текущий режим:</b> {label}\n"
-        f"Auto: Gemini → Gemma → Local fallback."
+        f"{format_models_guide()}\n\n"
+        f"{format_usage_status(user_id, provider)}"
     )
 
 
@@ -315,10 +362,17 @@ async def process_and_graph(message: Message, text: str, inv_id: int):
     await _send_graph_preview(message, inv_id, html_path, caption)
 
     entities_text = "\n".join(f"{entity.type}: {entity.value}" for entity in entities)
-    provider = get_user_ai_provider(message.from_user.id)
+    user_id = message.from_user.id
+    provider = get_user_ai_provider(user_id)
+    allowed, block_msg = check_ai_allowed(user_id, provider, is_admin=is_admin(user_id))
+    if not allowed:
+        await message.answer(f"🤖 <b>ShkoloDrive AI:</b>\n{_escape_html(block_msg or '')}")
+        return
+
     hint = await analyze_entities_with_ai(entities_text, provider=provider)
     if hint:
-        await message.answer(f"🤖 <b>ShkoloDrive AI:</b>\n{hint}")
+        record_ai_usage(user_id, provider)
+        await message.answer(f"🤖 <b>ShkoloDrive AI:</b>\n{_escape_html(hint)}")
 
 
 @dp.message(CommandStart())
@@ -476,9 +530,19 @@ async def cb_ai_hint(cb: CallbackQuery):
 
     entities_text = "\n".join(f"{row['entity_type']}: {row['value']}" for row in rows[:20])
     await cb.answer("Анализирую...")
-    provider = get_user_ai_provider(cb.from_user.id)
+    user_id = cb.from_user.id
+    provider = get_user_ai_provider(user_id)
+    allowed, block_msg = check_ai_allowed(user_id, provider, is_admin=is_admin(user_id))
+    if not allowed:
+        await cb.message.answer(f"🤖 <b>ShkoloDrive AI:</b>\n\n{_escape_html(block_msg or '')}")
+        await cb.answer()
+        return
+
     hint = await analyze_entities_with_ai(entities_text, provider=provider)
-    await cb.message.answer(f"🤖 <b>ShkoloDrive AI:</b>\n\n{hint or 'Подсказок пока нет.'}")
+    if hint:
+        record_ai_usage(user_id, provider)
+    hint_text = hint or "Подсказок пока нет."
+    await cb.message.answer(f"🤖 <b>ShkoloDrive AI:</b>\n\n{_escape_html(hint_text)}")
 
 
 @dp.callback_query(F.data.startswith("save:"))
@@ -604,7 +668,7 @@ async def cb_ai_provider(cb: CallbackQuery):
         _build_ai_ready_text(cb.from_user.id),
         reply_markup=ai_provider_kb(provider),
     )
-    await cb.answer(f"Режим AI: {get_provider_label(provider)}")
+    await cb.answer(f"Режим: {get_provider_label(provider)}")
 
 
 @dp.callback_query(F.data == "admin_reindex")

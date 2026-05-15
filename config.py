@@ -26,6 +26,10 @@ class Config:
     # Рабочая модель Gemini по умолчанию
     AI_MODEL: str = os.getenv("AI_MODEL", "models/gemini-2.5-flash")
 
+    # Дневные лимиты AI на пользователя (0 = без лимита для Local)
+    AI_DAILY_CLOUD_LIMIT: str = os.getenv("AI_DAILY_CLOUD_LIMIT", "20")
+    AI_DAILY_LOCAL_LIMIT: str = os.getenv("AI_DAILY_LOCAL_LIMIT", "100")
+
     # Database (SQLite file path; do not use Railway Postgres DATABASE_URL here)
     DB_PATH: str = os.getenv("DB_PATH", os.getenv("SQLITE_PATH", "overnetting.db"))
 

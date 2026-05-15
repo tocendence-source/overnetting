@@ -78,6 +78,14 @@ def init_db():
             updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS ai_daily_usage (
+            user_id         INTEGER NOT NULL,
+            usage_date      TEXT NOT NULL,
+            cloud_requests  INTEGER NOT NULL DEFAULT 0,
+            local_requests  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, usage_date)
+        );
+
         UPDATE links
         SET entity_a_id = MIN(entity_a_id, entity_b_id),
             entity_b_id = MAX(entity_a_id, entity_b_id)
@@ -370,3 +378,40 @@ def set_ai_provider(user_id: int, provider: str):
                SET provider=excluded.provider, updated_at=datetime('now')""",
             (user_id, provider)
         )
+
+
+def _today_usage_date() -> str:
+    with get_conn() as conn:
+        row = conn.execute("SELECT date('now') AS d").fetchone()
+    return row["d"] if row else datetime.now().strftime("%Y-%m-%d")
+
+
+def get_ai_daily_usage(user_id: int) -> dict:
+    usage_date = _today_usage_date()
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT cloud_requests, local_requests FROM ai_daily_usage
+               WHERE user_id=? AND usage_date=?""",
+            (user_id, usage_date),
+        ).fetchone()
+    if not row:
+        return {"cloud_requests": 0, "local_requests": 0, "usage_date": usage_date}
+    return {
+        "cloud_requests": int(row["cloud_requests"]),
+        "local_requests": int(row["local_requests"]),
+        "usage_date": usage_date,
+    }
+
+
+def increment_ai_daily_usage(user_id: int, *, cloud: bool) -> dict:
+    usage_date = _today_usage_date()
+    column = "cloud_requests" if cloud else "local_requests"
+    with get_conn() as conn:
+        conn.execute(
+            f"""INSERT INTO ai_daily_usage (user_id, usage_date, {column})
+                VALUES (?, ?, 1)
+                ON CONFLICT(user_id, usage_date) DO UPDATE
+                SET {column} = {column} + 1""",
+            (user_id, usage_date),
+        )
+    return get_ai_daily_usage(user_id)
